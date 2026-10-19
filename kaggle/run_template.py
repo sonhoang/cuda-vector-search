@@ -61,6 +61,9 @@ def main():
         return
 
     if MODE == "smoke":
+        step("sweep", f"{py} bench/sweep.py --n 1000000 --d 384 --out {RESULTS}/sweep.json", timeout=900)
+        step("sweep768", f"{py} bench/sweep.py --n 1000000 --d 768 --out {RESULTS}/sweep768.json", timeout=900)
+
         gpu_args = "--sizes 100000,1000000 --dims 384 --batches 1,32,256 --ks 10,100"
         base_args = "--sizes 100000 --dims 384 --batches 1,32,256 --ks 10,100"
     else:
@@ -68,7 +71,7 @@ def main():
         base_args = ""
     step("bench_gpu", f"{py} bench/bench_gpu.py {gpu_args} --out {RESULTS}/gpu.json", timeout=1200)
 
-    if MODE != "nofaiss":
+    if MODE == "full":
         if step("pip_faiss_gpu", f"{py} -m pip install -q faiss-gpu-cu12") != 0 or \
            step("faiss_check", f"{py} -c 'import faiss; n=faiss.get_num_gpus(); print(\"gpus\", n); assert n > 0'") != 0:
             step("pip_faiss_cpu", f"{py} -m pip install -q faiss-cpu")
@@ -79,6 +82,9 @@ def main():
     if inputs:
         step("report", f"{py} bench/report.py {inputs} --out {RESULTS}/t4.json")
 
+    if MODE != "full":
+        print(f"\nall done in {time.time() - T0:.0f}s")
+        return
     step("rag_demo",
          f"{py} -m pip install -q sentence-transformers >/dev/null 2>&1; "
          f"{py} examples/rag_search.py build examples/sample_docs --out /tmp/rag_index && "
