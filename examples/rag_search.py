@@ -23,7 +23,7 @@ from cuda_vector_search import Index  # noqa: E402
 DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
-def passages(folder: Path, max_chars: int = 600):
+def passages(folder: Path, max_chars: int = 300):
     """Split each .txt/.md file on blank lines and pack paragraphs up to max_chars."""
     out = []
     for f in sorted(folder.rglob("*")):
