@@ -1,0 +1,28 @@
+........................                                                 [100%]
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED tests/test_search.py::test_fused_matches_exact[1000-64-1-1]
+PASSED tests/test_search.py::test_fused_matches_exact[1000-64-3-10]
+PASSED tests/test_search.py::test_fused_matches_exact[4099-128-17-10]
+PASSED tests/test_search.py::test_fused_matches_exact[20000-384-1-10]
+PASSED tests/test_search.py::test_fused_matches_exact[20000-384-32-100]
+PASSED tests/test_search.py::test_fused_matches_exact[20000-384-100-33]
+PASSED tests/test_search.py::test_fused_matches_exact[20000-768-256-64]
+PASSED tests/test_search.py::test_fused_matches_exact[50000-384-70-128]
+PASSED tests/test_search.py::test_fused_matches_exact[30000-384-40-256]
+PASSED tests/test_search.py::test_fused_matches_exact[300-96-5-150]
+PASSED tests/test_search.py::test_fused_matches_exact[100-64-2-100]
+PASSED tests/test_search.py::test_twopass_and_torch_paths[5000-384-8-10]
+PASSED tests/test_search.py::test_twopass_and_torch_paths[20000-768-64-100]
+PASSED tests/test_search.py::test_cosine_metric_unnormalised_input
+PASSED tests/test_search.py::test_raw_ip_large_values
+PASSED tests/test_search.py::test_scores_kernel_matches_fp32
+PASSED tests/test_search.py::test_exact_reference_helper
+PASSED tests/test_search.py::test_one_dim_query_and_large_k_fallback
+PASSED tests/test_search.py::test_fused_plan_overrides
+PASSED tests/test_search.py::test_save_load_roundtrip
+PASSED tests/test_search.py::test_fused_large_state_configs[100-64]
+PASSED tests/test_search.py::test_fused_large_state_configs[256-32]
+PASSED tests/test_search.py::test_fused_large_state_configs[200-16]
+PASSED tests/test_search.py::test_fused_large_state_configs[40-64]
+24 passed in 95.12s (0:01:35)

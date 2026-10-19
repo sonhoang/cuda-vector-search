@@ -1,0 +1,36 @@
+
+indexed 18 passages from examples/sample_docs -> /tmp/rag_index (dim 384)
+
+Q: why does my bread go stale in the fridge?
+
+[1] 0.827  bread.txt
+    Keeping bread fresh Bread goes stale mostly because its starch recrystallises, not
+    because it dries out. That process is fastest at fridge temperature, so a loaf kept in
+    the refrigerator turns stale sooner than one left on the counter.
+
+[2] 0.524  bread.txt
+    For a loaf you will finish in two or three days, a paper bag or a bread box on the
+    counter is best. Plastic keeps the crumb soft but makes a crisp crust go leathery.
+
+Q: what should I do about a squeaky chain
+
+[1] 0.704  bicycle.txt
+    Bicycle chain care A chain that squeaks or looks orange needs attention. Wipe it with a
+    rag while turning the pedals backwards, then put one drop of chain lubricant on each
+    roller.
+
+[2] 0.486  bicycle.txt
+    Let the lube soak in for a few minutes and wipe off the excess. Oil left on the outside
+    of the chain only collects grit, which grinds down the chain and the sprockets.
+
+Q: how thick are the rings of saturn
+
+[1] 0.753  saturn.txt
+    Saturn's rings Saturn's rings are made of countless pieces of water ice, from grains of
+    dust to chunks the size of a house. They span hundreds of thousands of kilometres but
+    are mostly only tens of metres thick.
+
+[2] 0.548  saturn.txt
+    Measurements from the Cassini spacecraft suggest the rings may be young in astronomical
+    terms, perhaps a few hundred million years old, and that they are slowly raining down
+    onto the planet.
