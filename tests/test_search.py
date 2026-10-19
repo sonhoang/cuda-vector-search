@@ -154,3 +154,16 @@ def test_save_load_roundtrip(tmp_path):
     b = again.search(q.float().numpy(), 5, method="torch")
     assert torch.equal(a[1].cpu(), b[1].cpu())
     assert np.load(path).dtype == np.float16
+
+
+@cuda
+@pytest.mark.parametrize("k,bq", [(100, 64), (256, 32), (200, 16), (40, 64)])
+def test_fused_large_state_configs(k, bq):
+    mod = _ext.load()
+    x, q = make(30000, 384, 70, seed=k + bq)
+    index = Index(x.cuda(), metric="ip")
+    qq = index._prep_queries(q.cuda())
+    for chunks in (1, 5, 0):
+        v, i, plan = mod.fused_topk(qq, index._x, k, bq, chunks)
+        assert plan.tolist()[0] == bq
+        check_exact(index, q.cuda(), k, v, i.long())

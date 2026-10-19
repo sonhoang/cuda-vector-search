@@ -41,7 +41,7 @@ def load(verbose: bool = False):
             name="cuda_vector_search_ext",
             sources=[str(SOURCE)],
             extra_cflags=["-O3"],
-            extra_cuda_cflags=["-O3", "-lineinfo"],
+            extra_cuda_cflags=["-O3", "-lineinfo"] + (["-Xptxas=-v"] if verbose else []),
             verbose=verbose,
         )
         return _mod

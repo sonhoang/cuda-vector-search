@@ -7,7 +7,8 @@
 //
 // Both use the same tile routine: a block of 256 threads (8 warps) computes a
 // BQ x 128 tile of scores with WMMA tensor-core instructions (16x16x16 fp16
-// fragments, fp32 accumulators). Each warp owns one 16-column slab of the tile.
+// fragments, fp32 accumulators). The 8 warps split the tile 1x8 (BQ=16) or
+// 2x4, so each warp computes a 16x16, 16x32 or 32x32 sub-tile.
 //
 // The fused kernel splits the corpus into chunks (grid.y). Each block walks
 // its chunk tile by tile and keeps a running top-k per query in registers,
@@ -41,11 +42,18 @@ constexpr int LDS = DK + 8;    // padded smem row (halves) to spread banks
 constexpr int LDC = BN + 4;    // padded smem row (floats) for the score tile
 constexpr unsigned kFull = 0xffffffffu;
 constexpr int kMergeWarps = 4;
-static_assert(BN == 16 * kWarps, "each warp owns one 16-column slab");
+constexpr int kAutoState = 256;  // default limit on bq * ceil(k/32)
 
 template <int BQ>
 struct TileCfg {
-  static constexpr int FR = BQ / 16;           // accumulator fragments per warp
+  // Warp grid over the BQ x BN tile: 1 x 8 for BQ=16, 2 x 4 otherwise, so a
+  // warp computes 16x16, 16x32 or 32x32 and reuses each loaded fragment.
+  static constexpr int WR = BQ == 16 ? 1 : 2;
+  static constexpr int WC = kWarps / WR;
+  static constexpr int TM = BQ / WR;           // rows per warp
+  static constexpr int TN = BN / WC;           // columns per warp
+  static constexpr int FM = TM / 16;
+  static constexpr int FN = TN / 16;
   static constexpr int VPR = DK / 8;           // uint4 vectors per smem row
   static constexpr int QV = BQ * VPR;
   static constexpr int XV = BN * VPR;
@@ -124,15 +132,21 @@ __device__ __forceinline__ void score_tile(const half* __restrict__ Q, const hal
   half* Xs = Qs + BQ * LDS;
   float* Cs = reinterpret_cast<float*>(smem);
   const int warp = threadIdx.x >> 5;
+  const int wr = warp / C::WC;
+  const int wc = warp % C::WC;
 
-  wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc[C::FR];
+  wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc[C::FM][C::FN];
 #pragma unroll
-  for (int r = 0; r < C::FR; ++r) wmma::fill_fragment(acc[r], 0.0f);
+  for (int i = 0; i < C::FM; ++i)
+#pragma unroll
+    for (int j = 0; j < C::FN; ++j) wmma::fill_fragment(acc[i][j], 0.0f);
 
   uint4 qreg[C::QPT];
   uint4 xreg[C::XPT];
   tile_gload<BQ>(Q, X, nq, row_end, D, q0, n0, 0, qreg, xreg);
 
+  const half* Qw = Qs + wr * C::TM * LDS;
+  const half* Xw = Xs + wc * C::TN * LDS;
   for (int kk = 0; kk < D; kk += DK) {
     tile_sstore<BQ>(Qs, Xs, qreg, xreg);
     __syncthreads();
@@ -140,20 +154,25 @@ __device__ __forceinline__ void score_tile(const half* __restrict__ Q, const hal
     if (kk + DK < D) tile_gload<BQ>(Q, X, nq, row_end, D, q0, n0, kk + DK, qreg, xreg);
 #pragma unroll
     for (int k16 = 0; k16 < DK; k16 += 16) {
-      wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> b;
-      wmma::load_matrix_sync(b, Xs + warp * 16 * LDS + k16, LDS);
+      wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a[C::FM];
+      wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> b[C::FN];
 #pragma unroll
-      for (int r = 0; r < C::FR; ++r) {
-        wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a;
-        wmma::load_matrix_sync(a, Qs + r * 16 * LDS + k16, LDS);
-        wmma::mma_sync(acc[r], a, b, acc[r]);
-      }
+      for (int i = 0; i < C::FM; ++i) wmma::load_matrix_sync(a[i], Qw + i * 16 * LDS + k16, LDS);
+#pragma unroll
+      for (int j = 0; j < C::FN; ++j) wmma::load_matrix_sync(b[j], Xw + j * 16 * LDS + k16, LDS);
+#pragma unroll
+      for (int i = 0; i < C::FM; ++i)
+#pragma unroll
+        for (int j = 0; j < C::FN; ++j) wmma::mma_sync(acc[i][j], a[i], b[j], acc[i][j]);
     }
     __syncthreads();
   }
+  float* Cw = Cs + wr * C::TM * LDC + wc * C::TN;
 #pragma unroll
-  for (int r = 0; r < C::FR; ++r)
-    wmma::store_matrix_sync(Cs + r * 16 * LDC + warp * 16, acc[r], LDC, wmma::mem_row_major);
+  for (int i = 0; i < C::FM; ++i)
+#pragma unroll
+    for (int j = 0; j < C::FN; ++j)
+      wmma::store_matrix_sync(Cw + i * 16 * LDC + j * 16, acc[i][j], LDC, wmma::mem_row_major);
   __syncthreads();
 }
 
@@ -223,6 +242,35 @@ __device__ __forceinline__ void warp_topk_offer(float (&tv)[KPL], int (&ti)[KPL]
       }
       warp_min(tv, thr, mpos, lane);
     }
+  }
+}
+
+// Push one candidate per lane, where `base + lane` is the candidate's running
+// position in this list (base is warp-uniform and grows by 32 per call). The
+// first k candidates go straight into their slots with no comparisons; the
+// threshold only starts working once the list is full.
+template <int KPL>
+__device__ __forceinline__ void warp_topk_push(float (&tv)[KPL], int (&ti)[KPL], float& thr,
+                                               int& mpos, float v, int id, long long base, int k,
+                                               int lane) {
+  if (base < k) {  // warp-uniform: still filling
+    const long long p = base + lane;
+    if (p < k) {
+      const int slot = (int)(p >> 5);
+#pragma unroll
+      for (int s = 0; s < KPL; ++s) {
+        if (s == slot) {
+          tv[s] = v;
+          ti[s] = id;
+        }
+      }
+    }
+    if (base + 32 >= k) {
+      warp_min(tv, thr, mpos, lane);
+      warp_topk_offer(tv, ti, thr, mpos, p < k ? -INFINITY : v, id, lane);
+    }
+  } else {
+    warp_topk_offer(tv, ti, thr, mpos, v, id, lane);
   }
 }
 
@@ -297,7 +345,8 @@ fused_topk_kernel(const half* __restrict__ Q, const half* __restrict__ X, int nq
           const int c = t * 32 + lane;
           const long long col = n0 + c;
           const float v = (col < c_end) ? Cs[r * LDC + c] : -INFINITY;
-          warp_topk_offer(tv[j], ti[j], thr[j], mpos[j], v, (int)col, lane);
+          warp_topk_push(tv[j], ti[j], thr[j], mpos[j], v, col < c_end ? (int)col : -1,
+                         n0 - c_begin + t * 32, k, lane);
         }
       }
     }
@@ -343,7 +392,7 @@ merge_topk_kernel(const float* __restrict__ part_v, const int* __restrict__ part
     const long long i = b + lane;
     const float v = (i < per_query) ? pv[i] : -INFINITY;
     const int id = (i < per_query) ? pi[i] : -1;
-    warp_topk_offer(tv, ti, thr, mpos, v, id, lane);
+    warp_topk_push(tv, ti, thr, mpos, v, id, b, k, lane);
   }
 
   // Parked slots become empty entries; taken entries get id INT_MAX so an
@@ -461,9 +510,12 @@ std::vector<torch::Tensor> fused_topk(torch::Tensor q, torch::Tensor x, int64_t 
   TORCH_CHECK(k <= n, "k must not exceed the corpus size");
 
   const int kpl = slots_per_lane(k);
-  if (bq <= 0) bq = nq <= 16 ? 16 : nq <= 32 ? 32 : 64;
+  if (bq <= 0) {
+    bq = nq <= 16 ? 16 : nq <= 32 ? 32 : 64;
+    while (bq * kpl > kAutoState) bq /= 2;  // keep the top-k state small enough for registers
+  }
   TORCH_CHECK(bq == 16 || bq == 32 || bq == 64, "bq must be 16, 32 or 64");
-  while (bq * kpl > 128) bq /= 2;  // keep the per-thread top-k state in registers
+  TORCH_CHECK(bq * kpl <= 256, "bq * ceil(k/32) must be <= 256");
 
   const long long ntiles = (n + BN - 1) / BN;
   const long long qblocks = (nq + bq - 1) / bq;
@@ -471,7 +523,11 @@ std::vector<torch::Tensor> fused_topk(torch::Tensor q, torch::Tensor x, int64_t 
     const int sms = at::cuda::getDeviceProperties(q.device().index())->multiProcessorCount;
     const long long min_tiles = std::max<long long>(2, (8 * k + BN - 1) / BN);
     const long long max_chunks = std::max<long long>(1, ntiles / min_tiles);
-    const long long target = std::max<long long>(1, (8LL * sms + qblocks - 1) / std::max<long long>(qblocks, 1));
+    // Measured on a T4 (bench/sweep.py): one or two blocks per SM in total is
+    // best. More chunks mean more warm-up insertions and a bigger merge; the
+    // tile loop itself does not need more occupancy than that.
+    const long long blocks = (k <= 32 ? 2LL : 1LL) * sms;
+    const long long target = std::max<long long>(1, (blocks + qblocks - 1) / qblocks);
     chunks = std::min(target, max_chunks);
   }
   chunks = std::max<long long>(1, std::min<long long>({(long long)chunks, ntiles, 65535LL}));
@@ -505,8 +561,8 @@ std::vector<torch::Tensor> fused_topk(torch::Tensor q, torch::Tensor x, int64_t 
     launched = true;                                                                            \
   }
   CVS_FUSED(16, 1) CVS_FUSED(16, 2) CVS_FUSED(16, 4) CVS_FUSED(16, 8)
-  CVS_FUSED(32, 1) CVS_FUSED(32, 2) CVS_FUSED(32, 4)
-  CVS_FUSED(64, 1) CVS_FUSED(64, 2)
+  CVS_FUSED(32, 1) CVS_FUSED(32, 2) CVS_FUSED(32, 4) CVS_FUSED(32, 8)
+  CVS_FUSED(64, 1) CVS_FUSED(64, 2) CVS_FUSED(64, 4)
 #undef CVS_FUSED
   TORCH_CHECK(launched, "no fused kernel for bq=", bq, " kpl=", kpl);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
