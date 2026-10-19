@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cuda-vector-search"
+version = "0.1.0"
+description = "Exact top-k vector search on the GPU with custom CUDA kernels (fp16 tensor cores + fused top-k)"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Son Hoang"}]
+requires-python = ">=3.9"
+dependencies = ["torch>=2.0", "numpy", "ninja"]
+
+[project.optional-dependencies]
+rag = ["sentence-transformers"]
+bench = ["matplotlib", "faiss-cpu"]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["cuda_vector_search"]
+
+[tool.setuptools.package-data]
+cuda_vector_search = ["csrc/*.cu"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
